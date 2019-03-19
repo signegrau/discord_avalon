@@ -24,3 +24,5 @@ discord_avalon-*.tar
 
 .idea
 .idea/
+target
+project/target

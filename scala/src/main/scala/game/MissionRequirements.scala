@@ -8,6 +8,8 @@ case class MissionRequirements(
 object MissionRequirements {
   val missions = Map(
     1 -> Seq(MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1)),
+    2 -> Seq(MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1)),
+    3 -> Seq(MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1),MissionRequirements(1)),
     5 -> Seq(MissionRequirements(2),MissionRequirements(3),MissionRequirements(2),MissionRequirements(3),MissionRequirements(3)),
     6 -> Seq(MissionRequirements(2),MissionRequirements(3),MissionRequirements(4),MissionRequirements(3),MissionRequirements(4)),
     7 -> Seq(MissionRequirements(2),MissionRequirements(3),MissionRequirements(3),MissionRequirements(4,1),MissionRequirements(4)),

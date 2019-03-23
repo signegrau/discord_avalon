@@ -1,15 +1,24 @@
 package game
 
-trait Role
+trait Role {
+  def isEvil: Boolean
+  def isGood: Boolean
+}
 
-trait Evil extends Role
+trait Evil extends Role {
+  def isEvil: Boolean = true
+  def isGood: Boolean = false
+}
 case object Mordred extends Evil
 case object Assassin extends Evil
 case object Morgana extends Evil
 case object Oberon extends Evil
 case object Minion extends Evil
 
-trait Good extends Role
+trait Good extends Role{
+  def isEvil: Boolean = false
+  def isGood: Boolean = true
+}
 case object Merlin extends Good
 case object Percival extends Good
 case object Servant extends Good

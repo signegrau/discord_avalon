@@ -27,7 +27,7 @@ object Main extends App {
   case class AssassinPickPhase(board: BoardState) extends State
 
   var state: State = InitialState
-  var gameChannel : MessageChannel = _
+  var gameChannel : Option[MessageChannel] = None
   val paricipating = scala.collection.concurrent.TrieMap.empty[String, Player]
 
   val msgCreate = client.getEventDispatcher.on(classOf[MessageCreateEvent])
@@ -43,313 +43,368 @@ object Main extends App {
 
         val args = msg.getContent.map[Seq[String]](x => x.split(" ").tail).orElse(Seq.empty)
 
-
-        state match {
-          case InitialState => args.head match {
-            case "newgame" => {
-              gameChannel = msg.getChannel.block()
-
-              if (args.tail.isEmpty) {
-                "Need game creation arguments, please consolidate the help section"
-              } else {
-                val default = "Creating new game "
-
-                val argResponse = if (args(1).forall(_.isDigit)) {
-                  state = NewGame(Random.shuffle(Role.presets(args(1).toInt)))
-                  s"with ${args(1).toInt} player preset"
-                } else {
-                  state = NewGame(Random.shuffle(args.tail.map(Role.fromString)))
-                  s"with characters ${args.tail.mkString(" ")}"
-                }
-
-
-                default + argResponse
-              }
+        if (args.isEmpty) {
+          "Give me more arguments please"
+        } else {
+          //Match any stateless actions
+          args.head match {
+            case "cancelgame" => {
+              paricipating.clear()
+              state = InitialState
+              "Game canceled"
             }
-            case _ => "Please start a new game before issuing commands"
-          }
-          case NewGame(roles) => { args.head match {
-            case "join" =>
-              if (roles.nonEmpty) {
-                val role = roles.head
+            case "order" => s"The player order is ${state match {
+              case CompanionSelection(board) => s"${board.players.map(_.playerName).mkString(", ")}"
+              case PreMissionVoting(board, votes) => s"${board.players.map(_.playerName).mkString(", ")}"
+              case SuccessFailureVoting(board, _) => s"${board.players.map(_.playerName).mkString(", ")}"
+              case AssassinPickPhase(board) => s"${board.players.map(_.playerName).mkString(", ")}"
+              case _ => s"No state, please start a new game"
+            }}"
+            case "status" => s"The current game phase is: ${state match {
+              case InitialState => "no game started"
+              case NewGame(remainingRoles) => s"new game with roles ${Random.shuffle(remainingRoles ++ paricipating.values.map(_.role)).map(Role.fromRole)}"
+              case CompanionSelection(board) => s"companion selection with the companions ${board.playersOnMission.map(_.playerName).mkString(", ")}"
+              case PreMissionVoting(board, votes) => s"yes/no voting phase, SOMEONE still needs to vote (${Random.shuffle((board.players.toSet -- votes.votes.map(_._2).toSet).toSeq.map(_.playerName)).mkString(", ")})"
+              case SuccessFailureVoting(_, _) => s"success/failure voting phase"
+              case AssassinPickPhase(_) => s"assassin voting phase"
+              case _ => s"No state, please start a new game"
+            }}"
+            case "help" => {
+              dmChannel.createMessage(
+                "The game status can be found by executing the following\n" +
+                "```!avalon status```\n" +
+                "The order can be seen by running\n" +
+                "```!avalon order```"+
+                "The game status can be found by executing the following\n" +
+                "```!avalon cancelgame```"
+                ).block()
+              ""
+            }
+            case _ => state match {
+              case InitialState => args.head match {
+                case "newgame" => {
+                  gameChannel = Some(msg.getChannel.block())
 
-                if (paricipating.contains(authorid)) {
-                  s"You are already in the game ${authorName}"
-                } else {
-                  paricipating.update(
-                    authorid,
-                    Player(authorid, authorName, dmChannel, role))
+                  if (args.tail.isEmpty) {
+                    "Need game creation arguments, please consolidate the help section"
+                  } else {
+                    val default = "Creating new game "
 
-                  val newRoles = roles.tail
-
-                  state = NewGame(newRoles)
-
-                  if (newRoles.isEmpty) {
-                    paricipating.values.map(x => x.dmChannel.createMessage(s"You are ${Role.fromRole(x.role)}").block())
-
-                    val king = Random.shuffle(paricipating.values.toSeq).head
-                    state = CompanionSelection(GameState.newGame(paricipating.values.toSeq, king))
-
-                    //Merlin sees everyone but mordred
-                    val merlin = paricipating.values.find(_.role == Merlin)
-
-                    if (merlin.isEmpty) {
-                      "We're gonna restart the game, there is no Merlin"
+                    val argResponse = if (args(1).forall(_.isDigit)) {
+                      state = NewGame(Random.shuffle(Role.presets(args(1).toInt)))
+                      s"with ${args(1).toInt} player preset"
                     } else {
-                      println("Hello1")
-                      val evils = paricipating.values.filter { x =>
-                        x.role match {
-                          case _: Evil => true
-                          case _: Good => false
+                      state = NewGame(Random.shuffle(args.tail.map(Role.fromString)))
+                      s"with characters ${args.tail.mkString(" ")}"
+                    }
+
+
+                    default + argResponse
+                  }
+                }
+                case _ => "Please start a new game before issuing commands"
+              }
+              case NewGame(roles) => { args.head match {
+                case "join" =>
+                  if (roles.nonEmpty) {
+                    val role = roles.head
+
+                    if (paricipating.contains(authorid)) {
+                      s"You are already in the game ${authorName}"
+                    } else {
+                      paricipating.update(
+                        authorid,
+                        Player(authorid, authorName, dmChannel, role))
+
+                      val newRoles = roles.tail
+
+                      state = NewGame(newRoles)
+
+                      if (newRoles.isEmpty) {
+                        paricipating.values.map(x => x.dmChannel.createMessage(s"You are ${Role.fromRole(x.role)}").block())
+
+                        val king = Random.shuffle(paricipating.values.toSeq).head
+                        state = CompanionSelection(GameState.newGame(paricipating.values.toSeq, king))
+
+                        //Merlin sees everyone but mordred
+                        val merlin = paricipating.values.find(_.role == Merlin)
+
+                        if (merlin.isEmpty) {
+                          "We're gonna restart the game, there is no Merlin"
+                        } else {
+                          println("Hello1")
+                          val evils = paricipating.values.filter { x =>
+                            x.role match {
+                              case _: Evil => true
+                              case _: Good => false
+                            }
+                          }
+
+                          evils.filterNot(_.role == Mordred).foreach { e =>
+                            merlin.get.dmChannel.createMessage(s"You see that ${e.playerName} is evil").block()
+                          }
+
+                          val morg = paricipating.values.find(_.role == Morgana)
+
+                          morg.map { morgana =>
+                            val morgAndMerlin = Random.shuffle(Seq(merlin.get, morgana))
+
+                            paricipating.values.find(_.role == Percival).map { p =>
+                              p.dmChannel.createMessage("You see two players, one which is Merlin and one of which is Morgana\n" +
+                                s"The players are ${morgAndMerlin.head.playerName} and ${morgAndMerlin.last.playerName}").block()
+                            }
+                          }
+
+                          val evilButOberon = evils.filter(_.role != Oberon)
+
+                          evilButOberon.toList.combinations(2).foreach { x =>
+                            val first = x.head
+                            val last = x.last
+
+                            first.dmChannel.createMessage(s"${last.playerName} is evil").block()
+                            last.dmChannel.createMessage(s"${first.playerName} is evil").block()
+                          }
+
+                          s"User joined\n\nGame commencing with players\n${paricipating.values.map(x => x.playerName).mkString("\n")}" +
+                            s"\nThe king ${king.playerName} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
+                            s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, 0).people}" +
+                            s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, 0).failuresAllowed + 1}"
                         }
+                      } else {
+                        "User joined"
                       }
-                      println("Hello2")
+                    }
+                  } else {""}
 
-                      evils.foreach { e =>
-                        merlin.get.dmChannel.createMessage(s"You see that ${e.playerName} is evil").block()
+                case _ => "We are in join phase, only joining is allowed"
+              }}
+              case CompanionSelection(board) => { args.head match {
+                case "status" => {
+                  "The invited companions are\n" + board.playersOnMission.map(_.playerName).mkString("\n")
+                }
+                case "commence" => {
+                  if (authorid == board.king.uid) {
+                    if (board.playersOnMission.size == MissionRequirements.getPlayersForMission(board.players.size, board.mission).people) {
+                      state = PreMissionVoting(board.copy(gamePhase = PreMissionVote), PreMissionVotes(Seq.empty))
+
+                      paricipating.values.map{ p =>
+                        p.dmChannel.createMessage("Please vote with !avalon vote Yes/No").block()
                       }
-                      println("Hello3")
 
-                      val morg = paricipating.values.find(_.role == Morgana)
-
-                      morg.map { morgana =>
-                        val morgAndMerlin = Random.shuffle(Seq(merlin.get, morgana))
-                        println("Hello4")
-
-                        paricipating.values.find(_.role == Percival).map { p =>
-                          p.dmChannel.createMessage("You see two players, one which is Merlin and one of which is Morgana\n" +
-                            s"The players are ${morgAndMerlin.head.playerName} and ${morgAndMerlin.last.playerName}").block()
-                        }
-                      }
-
-                      println("Hello5")
-
-                      val evilButOberon = evils.filter(_.role != Oberon)
-
-                      evilButOberon.toList.combinations(2).foreach { x =>
-                        val first = x.head
-                        val last = x.last
-
-                        first.dmChannel.createMessage(s"${last.playerName} is evil").block()
-                        last.dmChannel.createMessage(s"${first.playerName} is evil").block()
-                      }
-                      println("Hello6")
-
-                      s"User joined\n\nGame commencing with players\n${paricipating.values.map(x => x.playerName).mkString("\n")}" +
-                        s"\nThe king ${king.playerName} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
-                      s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, 0).people}" +
-                        s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, 0).failuresAllowed}"
+                      "Commencing mission with\n" + board.playersOnMission.map(_.playerName).mkString("\n")
+                    } else {
+                      s"Please select the correct number of companions " +
+                        s"${MissionRequirements.getPlayersForMission(board.players.size, board.mission).people}" +
+                        "\nCurrently selected are\n" +
+                        board.playersOnMission.map(_.playerName.mkString("\n"))
                     }
                   } else {
-                    "User joined"
+                    "You are not the king"
                   }
                 }
-              } else {""}
-
-            case _ => "We are in join phase, only joining is allowed"
-          }}
-          case CompanionSelection(board) => { args.head match {
-            case "status" => {
-              "The invited companions are\n" + board.playersOnMission.map(_.playerName).mkString("\n")
-            }
-            case "commence" => {
-              if (authorid == board.king.uid) {
-                if (board.playersOnMission.size == MissionRequirements.getPlayersForMission(board.players.size, board.mission).people) {
-                  state = PreMissionVoting(board.copy(gamePhase = PreMissionVote), PreMissionVotes(Seq.empty))
-
-                  paricipating.values.map{ p =>
-                    p.dmChannel.createMessage("Please vote with !avalon vote Yes/No").block()
-                  }
-
-                  "Commencing mission with\n" + board.playersOnMission.map(_.playerName).mkString("\n")
-                } else {
-                  s"Please select the correct number of companions " +
-                    s"${MissionRequirements.getPlayersForMission(board.players.size, board.mission).people}" +
-                  "\nCurrently selected are\n" +
-                  board.playersOnMission.map(_.playerName.mkString("\n"))
-                }
-              } else {
-                "You are not the king"
-              }
-            }
-            case "invite" => {
-              if (authorid == board.king.uid) {
-                if (board.playersOnMission.map(_.playerName).contains(args(1))) {
-                  "Please select a player who hasn't been invited yet"
-                } else {
-                  val player = paricipating.find(_._2.playerName == args(1))
-
-                  player.map{ p =>
-                    val default = s"Player ${p._2.playerName} has been invited"
-
-                    state = CompanionSelection(board.copy(playersOnMission = board.playersOnMission ++ Seq(p._2)))
-                    s"Player ${p._2.playerName} has been invited"
-                  }.getOrElse("Player not found")
-                }
-              } else {
-                "You are not the king"
-              }
-            }
-            case "uninvite" => {
-              if (board.playersOnMission.exists(x => x.playerName == args(1))) {
-                val newList = board.playersOnMission.filter(x => x.playerName != args(1))
-                state = CompanionSelection(board.copy(playersOnMission = newList))
-                "The player has been uninvited from the quest"
-              } else {
-                "The player has not been invited"
-              }
-            }
-            case _ => s"Please enter a valid command"
-          }}
-          case PreMissionVoting(board, votes) => { args.head match {
-            case "vote" => {
-              if (isDmMessage) {
-                if (board.players.exists(p => p.uid == authorid)) {
-                  if (args(1).toLowerCase.contains("yes") || args(1).toLowerCase.contains("no")) {
-                    val vote: PreMissionVotePhase = if (args(1).toLowerCase.contains("yes")) {
-                      Yes: PreMissionVotePhase
+                case "invite" => {
+                  if (authorid == board.king.uid) {
+                    if (board.playersOnMission.map(_.playerName).contains(args(1))) {
+                      "Please select a player who hasn't been invited yet"
                     } else {
-                      No: PreMissionVotePhase
+                      val player = paricipating.find(_._2.playerName == args(1))
+
+                      player.map{ p =>
+                        val default = s"Player ${p._2.playerName} has been invited"
+
+                        state = CompanionSelection(board.copy(playersOnMission = board.playersOnMission ++ Seq(p._2)))
+                        s"Player ${p._2.playerName} has been invited"
+                      }.getOrElse("Player not found")
                     }
+                  } else {
+                    "You are not the king"
+                  }
+                }
+                case "uninvite" => {
+                  if (authorid == board.king.uid) {
+                    if (board.playersOnMission.exists(x => x.playerName == args(1))) {
+                      val newList = board.playersOnMission.filter(x => x.playerName != args(1))
+                      state = CompanionSelection(board.copy(playersOnMission = newList))
+                      "The player has been uninvited from the quest"
+                    } else {
+                      "The player has not been invited"
+                    }
+                  } else {
+                    "You are not the king"
+                  }
+                }
+                case _ => s"Please enter a valid command"
+              }}
+              case PreMissionVoting(board, votes) => { args.head match {
+                case "vote" => {
+                  if (isDmMessage) {
+                    if (board.players.exists(p => p.uid == authorid)) {
+                      if (args(1).toLowerCase.contains("yes") || args(1).toLowerCase.contains("no")) {
+                        val vote: PreMissionVotePhase = if (args(1).toLowerCase.contains("yes")) {
+                          Yes: PreMissionVotePhase
+                        } else {
+                          No: PreMissionVotePhase
+                        }
 
-                    val newVotes = PreMissionVotes(votes.votes.filter(_._2.uid != authorid)
-                      ++ Seq((vote, board.players.find(x => x.uid == authorid).get)))
+                        val newVotes = PreMissionVotes(votes.votes.filter(_._2.uid != authorid)
+                          ++ Seq((vote, board.players.find(x => x.uid == authorid).get)))
 
-                    state = PreMissionVoting(board, newVotes)
+                        state = PreMissionVoting(board, newVotes)
 
-                    dmChannel.createMessage("Vote accepted").block()
+                        dmChannel.createMessage("Vote accepted").block()
 
-                    if (newVotes.votes.length == board.players.length) {
-                      val newBoard = GameState.performStep(board, newVotes)
+                        if (newVotes.votes.length == board.players.length) {
+                          val newBoard = GameState.performStep(board, newVotes)
 
-                      newBoard match {
-                        case Left(e) => e
-                        case Right((boardInner, response)) => {
-                          val out = boardInner.gamePhase match {
-                            case CompanionDelegation => {
-                              state = CompanionSelection(boardInner)
-                              s"\nThe king ${boardInner.king} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
-                              s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).people}" +
-                              s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).failuresAllowed}"
+                          newBoard match {
+                            case Left(e) => e
+                            case Right((boardInner, response)) => {
+                              val out = boardInner.gamePhase match {
+                                case CompanionDelegation => {
+                                  state = CompanionSelection(boardInner)
+                                  s"\nThe king ${boardInner.king.playerName} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
+                                    s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).people}" +
+                                    s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).failuresAllowed + 1}"
 
-                            }
-                            case PreMissionVote => state = PreMissionVoting(boardInner, PreMissionVotes(Seq.empty))
-                            case SuccessFailureVote => {
-                              paricipating.values.filter(p => boardInner.playersOnMission.exists(x => x.uid == p.uid)).map{ p =>
-                                p.dmChannel.createMessage("Please vote with !avalon vote Success/Failure").block()
+                                }
+                                case PreMissionVote => state = PreMissionVoting(boardInner, PreMissionVotes(Seq.empty))
+                                case SuccessFailureVote => {
+                                  paricipating.values.filter(p => boardInner.playersOnMission.exists(x => x.uid == p.uid)).map{ p =>
+                                    p.role match {
+                                      case _:Evil => p.dmChannel.createMessage("Please vote with !avalon vote Success/Failure").block()
+                                      case _:Good => p.dmChannel.createMessage("You're good, automatic success").block()
+                                    }
+                                  }
+
+                                  state = SuccessFailureVoting(boardInner, PostMissionVotes(boardInner.playersOnMission.filter(_.role.isGood).map(x => (Success: PostMissionVote, x))))
+
+                                  ""
+                                }
                               }
 
-                              state = SuccessFailureVoting(boardInner, PostMissionVotes(Seq.empty))
-
-                              ""
+                              response + out
                             }
                           }
-
-                          response + out
+                        } else {
+                          ""
                         }
+                      } else {
+                        dmChannel.createMessage("Vote Yes/No please").block()
+
+                        ""
                       }
                     } else {
-                      ""
+                      "You are not allowed to vote"
                     }
                   } else {
-                    dmChannel.createMessage("Vote Yes/No please").block()
-
-                    ""
+                    "Only DM's, you monkey"
                   }
-                } else {
-                  "You are not allowed to vote"
                 }
-              } else {
-                "Only DM's, you monkey"
-              }
-            }
-            case _ => ""
-          }}
-          case SuccessFailureVoting(board, votes) => { args.head match {
-            case "vote" => {
-              if (isDmMessage) {
-                if (board.playersOnMission.exists(p => p.uid == authorid)) {
-                  if (args(1).contains("Success") || args(1).contains("Failure")) {
-                    val vote: PostMissionVote = if (args(1).contains("Success")) {
-                      Success: PostMissionVote
-                    } else {
-                      Failure: PostMissionVote
-                    }
+                case _ => ""
+              }}
+              case SuccessFailureVoting(board, votes) => { args.head match {
+                case "vote" => {
+                  if (isDmMessage) {
+                    if (board.playersOnMission.exists(p => p.uid == authorid) && board.playersOnMission.find(_.uid == authorid).exists(_.role.isEvil)) {
+                      if (args(1).contains("Success") || args(1).contains("Failure")) {
+                        val vote: PostMissionVote = if (args(1).contains("Success")) {
+                          Success: PostMissionVote
+                        } else {
+                          Failure: PostMissionVote
+                        }
 
-                    val newVotes = PostMissionVotes(votes.votes.filter(_._2.uid != authorid)
-                      ++ Seq((vote, board.players.find(x => x.uid == authorid).get)))
+                        val newVotes = PostMissionVotes(votes.votes.filter(_._2.uid != authorid)
+                          ++ Seq((vote, board.players.find(x => x.uid == authorid).get)))
 
-                    state = SuccessFailureVoting(board, newVotes)
+                        state = SuccessFailureVoting(board, newVotes)
 
-                    dmChannel.createMessage("Vote accepted").block()
+                        dmChannel.createMessage("Vote accepted").block()
 
-                    if (newVotes.votes.length == board.playersOnMission.length) {
-                      val newBoard = GameState.performStep(board, newVotes)
+                        if (newVotes.votes.length == board.playersOnMission.length) {
+                          val newBoard = GameState.performStep(board, newVotes)
 
-                      newBoard match {
-                        case Left(e) => e
-                        case Right((boardInner, response)) => {
-                          val extra = boardInner.gamePhase match {
-                            case CompanionDelegation => {
-                              state = CompanionSelection(boardInner)
+                          newBoard match {
+                            case Left(e) => e
+                            case Right((boardInner, response)) => {
+                              val extra = boardInner.gamePhase match {
+                                case CompanionDelegation => {
+                                  state = CompanionSelection(boardInner)
 
-                              s"\nThe king ${boardInner.king} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
-                                s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).people}" +
-                                s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).failuresAllowed}"
+                                  s"\nThe king ${boardInner.king.playerName} may now select the players who will join his quest, by typing\n!avalon invite PLAYERNAME"+
+                                    s"\nThe required amount of players for this mission is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).people}" +
+                                    s"\nThe amount of failures required for the evil to win the round is ${MissionRequirements.getPlayersForMission(paricipating.size, boardInner.mission).failuresAllowed + 1}"
+                                }
+                                case PreMissionVote => {
+                                  state = PreMissionVoting(boardInner, PreMissionVotes(Seq.empty))
+                                  ""
+                                }
+                                case SuccessFailureVote => {
+                                  state = SuccessFailureVoting(boardInner, PostMissionVotes(Seq.empty))
+                                  ""
+                                }
+                                case GameEnd => {
+                                  state = InitialState
+                                  paricipating.clear()
+                                  ""
+                                }
+                                case GoodWins => {
+                                  state = AssassinPickPhase(boardInner)
+                                  "The assassin must pick merlin with !avalon vote PLAYERNAME"
+                                }
+                              }
+
+                              response + extra
                             }
-                            case PreMissionVote => state = PreMissionVoting(boardInner, PreMissionVotes(Seq.empty))
-                            case SuccessFailureVote => state = SuccessFailureVoting(boardInner, PostMissionVotes(Seq.empty))
-                            case GameEnd => state = InitialState
-                            case GoodWins => state = AssassinPickPhase(boardInner)
                           }
-
-                          response + extra
+                        } else {
+                          ""
                         }
+                      } else {
+                        dmChannel.createMessage("Vote Success/Failure please").block()
+
+                        ""
                       }
                     } else {
-                      ""
+                      "You are not allowed to vote"
                     }
                   } else {
-                    dmChannel.createMessage("Vote Success/Failure please").block()
-
-                    ""
+                    "Only DM's, you monkey"
                   }
-                } else {
-                  "You are not allowed to vote"
                 }
-              } else {
-                "Only DM's, you monkey"
-              }
-            }
-            case _ => ""
-          }}
-          case AssassinPickPhase(board) => args.head match {
-            case "vote" => {
-              val assassin = board.players.find(_.role == Assassin).get
+                case _ => ""
+              }}
+              case AssassinPickPhase(board) => args.head match {
+                case "vote" => {
+                  val assassin = board.players.find(_.role == Assassin).get
 
-              if (authorid == assassin.uid) {
-                board.players.find(_.playerName == args(1)) match {
-                  case None => "Please select a player who is in the game"
-                  case Some(pick) => {
-                    val newBoard = GameState.performStep(board, AssassinPick(pick))
+                  if (authorid == assassin.uid) {
+                    board.players.find(_.playerName == args(1)) match {
+                      case None => "Please select a player who is in the game"
+                      case Some(pick) => {
+                        val newBoard = GameState.performStep(board, AssassinPick(pick))
 
-                    newBoard match {
-                      case Left(e) => e
-                      case Right((boardInner, response)) => {
-                        boardInner.gamePhase match {
-                          case _ => state = InitialState
+                        newBoard match {
+                          case Left(e) => e
+                          case Right((boardInner, response)) => {
+                            boardInner.gamePhase match {
+                              case _ => {
+                                paricipating.clear()
+                                state = InitialState
+                              }
+                            }
+
+                            response
+                          }
                         }
-
-                        response
                       }
                     }
+                  } else {
+                    s"You are not the Assassin ${authorName}"
                   }
                 }
-              } else {
-                s"You are not the Assassin ${authorName}"
+                case _ => ""
               }
             }
-            case _ => ""
           }
         }
       } match {
@@ -361,7 +416,7 @@ object Main extends App {
       }
 
       if (responsestate != "") {
-        gameChannel.createMessage(responsestate).block()
+        gameChannel.getOrElse(msg.getChannel.block()).createMessage(responsestate).block()
       } else {
         msg
       }
